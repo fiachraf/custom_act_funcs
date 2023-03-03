@@ -200,30 +200,67 @@ class Pos_Hill_V3(nn.Module):
 
 
 def double_hill(x, start_p=(-2,0), peak_1=(-1,1), mid_p=(0,0), peak_2=(1,1), end_p=(2,0)):
-        y = torch.clone(x)
-        up_slope_1 = (peak_1[1] - start_p[1]) / (peak_1[0] - start_p[0])
-        down_slope_1 = (mid_p[1] - peak_1[1]) / (mid_p[0] - peak_1[0])
-        c1 = start_p[1] - up_slope_1 * start_p[0]
-        c2 = mid_p[1] - down_slope_1 * mid_p[0]
 
-        up_slope_2 = (peak_2[1] - mid_p[1]) / (peak_2[0] - mid_p[0])
-        down_slope_2 = (end_p[1] - peak_2[1]) / (end_p[0] - peak_2[0])
-        c3 = mid_p[1] - up_slope_2 * mid_p[0]
-        c4 = end_p[1] - down_slope_2 * end_p[0]
+    #changing the tuples to be tensors with the same dtype as the input tensor x, as torch.where requires all arguments to have the same dtype
+    t_start_p = x.new([start_p[0], start_p[1]])
+    t_peak_1 = x.new([peak_1[0], peak_1[1]])
+    t_mid_p = x.new([mid_p[0], mid_p[1]])
+    t_peak_2 = x.new([peak_2[0], peak_2[1]])
+    t_end_p = x.new([end_p[0], end_p[1]])
+    #creating a tensor with the same dtype and device as input x, to use to get the 0 slope, regardless of the input points used
+    t_zero = x.new([0.0])
 
+    up_slope_1 = (t_peak_1[1] - t_start_p[1]) / (t_peak_1[0] - t_start_p[0])
+    down_slope_1 = (t_mid_p[1] - t_peak_1[1]) / (t_mid_p[0] - t_peak_1[0])
+    c1 = t_start_p[1] - up_slope_1 * t_start_p[0]
+    c2 = t_mid_p[1] - down_slope_1 * t_mid_p[0]
 
-        left_1 = torch.where((y<=peak_1[0]) & (y>start_p[0]), y* up_slope_1 + c1, start_p[1])
-        right_1 = torch.where((y>peak_1[0]) & (y<mid_p[0]), y* down_slope_1 + c2, mid_p[1])
-        # truth_table = torch.where(torch.eq(left, y))
-        # rejoin = torch.where((a := 1 if truth_table else 0) > 0, left, right)
-        new_1 = torch.where(left_1>right_1, left_1, right_1)
-        # y[y>end_p[1]] = end_p[1]
-        left_2 = torch.where((y<=peak_2[0]) & (y>mid_p[0]), y* up_slope_2 + c3, mid_p[1])
-        right_2 = torch.where((y>peak_2[0]) & (y<end_p[0]), y* down_slope_2 + c4, end_p[1])
-        new_2 = torch.where(left_2>right_2, left_2, right_2)
+    up_slope_2 = (t_peak_2[1] - t_mid_p[1]) / (t_peak_2[0] - t_mid_p[0])
+    down_slope_2 = (t_end_p[1] - t_peak_2[1]) / (t_end_p[0] - t_peak_2[0])
+    c3 = t_mid_p[1] - up_slope_2 * t_mid_p[0]
+    c4 = t_end_p[1] - down_slope_2 * t_end_p[0]
 
-        new_3 = torch.where(new_2>new_1, new_2, new_1)
-        return new_3
+    #creating other tensors, one for multiplication and one for addition.
+    #By doing it with tensors it makes it much easier to do Backpropagation
+    #the multiplication is the multiplication by the slope and the addition is the adding the y intercept
+    #could change to make the turning point multiplied by 0
+
+    mul_tens = torch.empty_like(x)
+    add_tens = torch.empty_like(x)
+
+    #for inputs less than the start point (by default 0)
+    mul_tens = torch.where(x<=t_start_p[0], t_zero[0], mul_tens)
+    #for inputs between the start and mid points
+    mul_tens = torch.where((x>t_start_p[0]) & (x<t_peak_1[0]), up_slope_1, mul_tens)
+    #getting the slope at the peak turning point to be 0
+    mul_tens = torch.where(x==t_peak_1[0], t_zero, mul_tens)
+    #for inputs between the first peak and the valley
+    mul_tens = torch.where((x>t_peak_1[0]) & (x<t_mid_p[0]), down_slope_1, mul_tens)
+    #for inputs at the valley
+    mul_tens = torch.where(x==t_mid_p[0], t_zero, mul_tens)
+        #for inputs between the valley and the second peak
+    mul_tens = torch.where((x>t_mid_p[0]) & (x<t_peak_2[0]), up_slope_2, mul_tens)
+    #getting the slope at the peak turning point to be 0
+    mul_tens = torch.where(x==t_peak_2[0], t_zero, mul_tens)
+    #for inputs between the second peak and the end point
+    mul_tens = torch.where((x>t_peak_2[0]) & (x<t_end_p[0]), down_slope_2, mul_tens)
+    #for inputs greater than the end point (by default 2.0)
+    mul_tens = torch.where(x>=t_end_p[0], t_zero[0], mul_tens)
+
+    #doing the same thing for the addition tensor
+    add_tens = torch.where(x<=t_start_p[0], t_start_p[1], add_tens)
+    add_tens = torch.where((x>t_start_p[0]) & (x<t_peak_1[0]), c1, add_tens)
+    add_tens = torch.where(x==t_peak_1[0], t_peak_1[1], add_tens)
+    add_tens = torch.where((x>t_peak_1[0]) & (x<t_mid_p[0]), c2, add_tens)
+    add_tens = torch.where(x==t_mid_p[0], t_mid_p[1], add_tens)
+    add_tens = torch.where((x>t_mid_p[0]) & (x<t_peak_2[0]), c3, add_tens)
+    add_tens = torch.where(x==t_peak_2[0], t_peak_2[1], add_tens)
+    add_tens = torch.where((x>t_peak_2[0]) & (x<t_end_p[0]), c4, add_tens)
+    add_tens = torch.where(x>=t_end_p[0], t_end_p[1], add_tens)
+
+    x = torch.mul(x, mul_tens)
+    x = torch.add(x, add_tens)
+    return x
 class Double_Hill(nn.Module):
     def __init__(self, start_p=(-2,0), peak_1=(-1,1), mid_p=(0,0), peak_2=(1,1), end_p=(2,0)):
         super().__init__()
@@ -236,33 +273,56 @@ class Double_Hill(nn.Module):
         return double_hill(input, self.start_p, self.peak_1, self.mid_p, self.peak_2, self.end_p)
 
 def val_hill(x, start_p=(-2,0), val_p=(-1,-1), peak_p=(1,1), end_p=(2,0)):
-    y = torch.clone(x)
-    down_slope_1 = (val_p[1] - start_p[1]) / (val_p[0] - start_p[0])
-    up_slope_1 = (peak_p[1] - val_p[1]) / (peak_p[0] - val_p[0])
-    c1 = start_p[1] - down_slope_1 * start_p[0]
-    c2 = val_p[1] - up_slope_1 * val_p[0]
 
-    # up_slope_2 = (peak_2[1] - mid_p[1]) / (peak_2[0] - mid_p[0])
-    down_slope_2 = (end_p[1] - peak_p[1]) / (end_p[0] - peak_p[0])
-    c3 = peak_p[1] - down_slope_2 * peak_p[0]
-    # c4 = end_p[1] - down_slope_2 * end_p[0]
+    #changing the tuples to be tensors with the same dtype as the input tensor x, as torch.where requires all arguments to have the same dtype
+    t_start_p = x.new([start_p[0], start_p[1]])
+    t_val_p = x.new([val_p[0], val_p[1]])
+    t_peak_p = x.new([peak_p[0], peak_p[1]])
+    t_end_p = x.new([end_p[0], end_p[1]])
+    #creating a tensor with the same dtype and device as input x, to use to get the 0 slope, regardless of the input points used
+    t_zero = x.new([0.0])
 
-    #does it in 2 main sections the valley and hill sections. For the hill sections it sets any other value that isn't on the hill to be at the same value as the bottom of the valley so that in the last line for new_3, the inequality holds as the valley values will be greater than the hill values.
-    #This function is done with four subsections instead of three overall sectins as a "middle" section crosses the y axis which makes it difficult to then combine the sections using the torch.where inequalities
+    down_slope_1 = (t_val_p[1] - t_start_p[1]) / (t_val_p[0] - t_start_p[0])
+    up_slope_1 = (t_peak_p[1] - t_val_p[1]) / (t_peak_p[0] - t_val_p[0])
+    c1 = t_start_p[1] - down_slope_1 * t_start_p[0]
+    c2 = t_val_p[1] - up_slope_1 * t_val_p[0]
+    down_slope_2 = (t_end_p[1] - t_peak_p[1]) / (t_end_p[0] - t_peak_p[0])
+    c3 = t_peak_p[1] - down_slope_2 * t_peak_p[0]
 
-    mid_p = ((peak_p[0] + val_p[0]) / 2, (peak_p[1] + val_p[1]) / 2)
-    left = torch.where((y<=val_p[0]) & (y>start_p[0]), y* down_slope_1 + c1, start_p[1])
-    mid_left = torch.where((y>val_p[0]) & (y<mid_p[0]), y* up_slope_1 + c2, start_p[1])
-    # truth_table = torch.where(torch.eq(left, y))
-    # rejoin = torch.where((a := 1 if truth_table else 0) > 0, left, right)
-    new_1 = torch.where(left<mid_left, left, mid_left)
-    # y[y>end_p[1]] = end_p[1]
-    right = torch.where((y>peak_p[0]) & (y<end_p[0]), y* down_slope_2 + c3, val_p[1])
-    mid_right = torch.where((y>mid_p[0]) & (y<=peak_p[0]), y* up_slope_1 + c2, val_p[1])
-    new_2 = torch.where(mid_right>right, mid_right, right)
+    #creating other tensors, one for multiplication and one for addition.
+    #By doing it with tensors it makes it much easier to do Backpropagation
+    #the multiplication is the multiplication by the slope and the addition is the adding the y intercept
+    #could change to make the turning point multiplied by 0
+    mul_tens = torch.empty_like(x)
+    add_tens = torch.empty_like(x)
 
-    new_3 = torch.where(new_1>new_2, new_1, new_2)
-    return new_3
+    #for inputs less than the start point (by default 0)
+    mul_tens = torch.where(x<=t_start_p[0], t_zero[0], mul_tens)
+    #for inputs between the start and mid points
+    mul_tens = torch.where((x>t_start_p[0]) & (x<t_val_p[0]), down_slope_1, mul_tens)
+    #getting the slope at the valley turning point to be 0
+    mul_tens = torch.where(x==t_val_p[0], t_zero, mul_tens)
+    #for inputs between the first peak and the valley
+    mul_tens = torch.where((x>t_val_p[0]) & (x<t_peak_p[0]), up_slope_1, mul_tens)
+    #for inputs at the peak
+    mul_tens = torch.where(x==t_peak_p[0], t_zero, mul_tens)
+    #for inputs between the peak and the end
+    mul_tens = torch.where((x>t_peak_p[0]) & (x<t_end_p[0]), down_slope_2, mul_tens)
+    #for inputs greater than the end point
+    mul_tens = torch.where(x>=t_end_p[0], t_zero[0], mul_tens)
+
+    #doing the same thing for the addition tensor
+    add_tens = torch.where(x<=t_start_p[0], t_start_p[1], add_tens)
+    add_tens = torch.where((x>t_start_p[0]) & (x<t_val_p[0]), c1, add_tens)
+    add_tens = torch.where(x==t_val_p[0], t_val_p[1], add_tens)
+    add_tens = torch.where((x>t_val_p[0]) & (x<t_peak_p[0]), c2, add_tens)
+    add_tens = torch.where(x==t_peak_p[0], t_peak_p[1], add_tens)
+    add_tens = torch.where((x>t_peak_p[0]) & (x<t_end_p[0]), c3, add_tens)
+    add_tens = torch.where(x>=t_end_p[0], t_end_p[1], add_tens)
+
+    x = torch.mul(x, mul_tens)
+    x = torch.add(x, add_tens)
+    return x
 class Val_Hill(nn.Module):
     def __init__(self, start_p=(-2,0), val_p=(-1,-1), peak_p=(1,1), end_p=(2,0)):
         super().__init__()
@@ -284,11 +344,11 @@ if __name__ == '__main__':
     y = torch.tensor([[0.75, 0.76, 0.77], [0.1, 0.2, 0.3]], requires_grad=True)
     y1 = torch.tensor([[0.85, 0.86, 0.87], [0.91, 0.92, 0.93]], requires_grad=True)
     y7 = torch.tensor([[0.85, 0.86, 0.87], [0.91, 0.92, 0.93]])
-    print(f"y7: {y7}")
+    # print(f"y7: {y7}")
     y7_v = y7.view(-1)
-    print(f"y7_v: {y7_v}")
+    # print(f"y7_v: {y7_v}")
     y7_v[0] = 0
-    print(f"y7_v: {y7_v}")
+    # print(f"y7_v: {y7_v}")
     # x=torch.tensor([-1.0, -1.1, -1.2], requires_grad=True)
     # y = torch.tensor([0.75, 0.76, 0.77], requires_grad=True)
     # y1 = torch.tensor([0.85, 0.86, 0.87], requires_grad=True)
@@ -296,18 +356,18 @@ if __name__ == '__main__':
     y_v = y.view(-1)
     y1_v = y1.view(-1)
     new_1 = torch.empty_like(x_v)
-    for index, val in enumerate(x_v):
-        print(index, val)
-        new_1[index] = val * index
-    print(f"new_1: {new_1}")
+    # for index, val in enumerate(x_v):
+        # print(index, val)
+        # new_1[index] = val * index
+    # print(f"new_1: {new_1}")
     # print(f"new_1[0]: {new_1[0]}, new_1.backward():{new_1.backward()}, new_1.grad_fn: {new_1.grad_fn}, new_1.grad_fn.next_functions: {new_1.grad_fn.next_functions}, ")
-    print(f"new_1[0]: {new_1[0]}, new_1.grad_fn: {new_1.grad_fn}, new_1.grad_fn.next_functions: {new_1.grad_fn.next_functions}, ")
+    # print(f"new_1[0]: {new_1[0]}, new_1.grad_fn: {new_1.grad_fn}, new_1.grad_fn.next_functions: {new_1.grad_fn.next_functions}, ")
 
-    print(f"x: {x}")
-    print(f"x_v: {x_v}")
+    # print(f"x: {x}")
+    # print(f"x_v: {x_v}")
     # x_v[-1] = x_v[-1] + 7
-    print(f"x: {x}")
-    print(f"x_v: {x_v}")
+    # print(f"x: {x}")
+    # print(f"x_v: {x_v}")
     # x=torch.tensor([-1.0], requires_grad=True)
     # y = torch.tensor([0.75], requires_grad=True)
     # z = x * y
@@ -320,22 +380,22 @@ if __name__ == '__main__':
     a = pos_hill_v2(z)
     # a = pos_hill_v2(z)
     stacked = torch.stack((x,y,y1), -1)
-    print(f"stacked.size(): {stacked.size()}")
-    print(f"stacked: {stacked}")
-    for i, p in enumerate(stacked):
-        print(p)
-    stacked_v = torch.stack((x_v,y_v,y1_v), -1)
-    print(f"stacked_v.size(): {stacked_v.size()}")
-    print(f"stacked_v: {stacked_v}")
-    for i, p in enumerate(stacked_v):
-        print(p)
+    # print(f"stacked.size(): {stacked.size()}")
+    # print(f"stacked: {stacked}")
+    # for i, p in enumerate(stacked):
+        # print(p)
+    # stacked_v = torch.stack((x_v,y_v,y1_v), -1)
+    # print(f"stacked_v.size(): {stacked_v.size()}")
+    # print(f"stacked_v: {stacked_v}")
+    # for i, p in enumerate(stacked_v):
+        # print(p)
 
     # grad_1 = torch.autograd.grad(a, (x, y, z, a), create_graph=True)
     # print(f"x: {x.item()}, y: {y.item()}, z: {z.item()}, a: {a.item()}")
-    print(f"x: {x}, y: {y}, z: {z}, a: {a}")
+    # print(f"x: {x}, y: {y}, z: {z}, a: {a}")
     # print(f"a[0]: {a[0]}, a.backward():{a.backward()}, a.grad_fn: {a.grad_fn}, a.grad_fn.next_functions: {a.grad_fn.next_functions}, ")
     # print(f"grad_1: {grad_1}")
-    from torch.autograd import gradcheck
+    # from torch.autograd import gradcheck
 
     # x2 = torch.rand(256, dtype=torch.double, requires_grad=True)
     # x3 = torch.rand(256, dtype=torch.double, requires_grad=True)
