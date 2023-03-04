@@ -11,7 +11,11 @@ def neg_relu(x):
     #this index operation counts as an inplace operation and so it doesn't propagate gradients correctly without the previous clone step and even then it might not be propagaing gradients properly
     # y[y>0] = 0
     #however the torch.where function propagates gradients correctly and also removes the extra memory I'm probably using up from the clone statement
-    x = torch.where(x<0, x, 0)
+
+    #creating a tensor with the same dtype and device as input x, to use to get the 0 slope, regardless of the input points used
+    t_zero = x.new([0.0])
+    #torch.where seems to throw errors if all the arguments do not have the same dtype, such as "expected scalar type float but found long int", this suggests that the types are being cast in an unexpected fashion at some point, I mainly experience this error when using the ResNet NoNorm style network
+    x = torch.where(x<t_zero[0], x, t_zero[0])
     return x
 
 #has to be implemented as class in order to be used in a NeuralNetwork
@@ -26,9 +30,13 @@ class NegReLU(nn.Module):
 
 #relu with a different slope
 def dslope_relu(x, dslope=1.5):
-    #could possibly make dslope another input variable and also potentially a trainable parameter
+    #creating a tensor with the same dtype and device as input x, to use to get the 0 slope, regardless of the input points used
+    t_zero = x.new([0.0])
+    #essentially casting the dslope variable to be a tensor with the same dtype as the input
+    t_dslope = x.new([dslope])
+#could possibly make dslope another input variable and also potentially a trainable parameter
     #value of dslope should be changed and tested for different values
-    x = torch.where(x < 0, 0, x*dslope)
+    x = torch.where(x<t_zero[0], t_zero[0], x*t_dslope[0])
     return x
 class DSlopeReLU(nn.Module):
     def __init__(self, dslope=1.5):
@@ -42,8 +50,10 @@ class DSlopeReLU(nn.Module):
 
 #relu except the y intercept is changed and all positive values are increased/decreased by the value of the y intercept thus keeping the slope at 1
 def diff_y_relu(x, y_int=0.5):
+    t_zero = x.new([0.0])
+    t_y_int = x.new([y_int])
     #could possibly make y_int another input variable and also potentially a trainable parameter
-    x = torch.where(x<0, 0, x + y_int)
+    x = torch.where(x<t_zero[0], t_zero[0], x + t_y_int[0])
     return x
 class Diff_Y_ReLU(nn.Module):
     def __init__(self, y_int=0.5):
@@ -54,16 +64,44 @@ class Diff_Y_ReLU(nn.Module):
 
         #passed test for gradient propagation
 
+"""
+It seems I messed up my intial implementation of this pos hill function with x = torch.where(x<0.75), that 0.75 should be turn_point. So I am commenting this out atm but any results before 04/03/2023 will likely be as a result of this error
+"""
+# #output of function is like a hill, with the peak not necessarily in the middle, any inputs less than 0 or greater than 1 are set to 0
+# def pos_hill(x, turn_point=0.75):
+#     #could possibly make the slopes another input variable and also potentially a trainable parameter
+#     # need to change both the up_slope and down_slope at the same time to maintain the continuity of the line
+#     t_zero = x.new([0.0])
+#     t_one = x.new([1.0])
+#     t_turn_point = x.new([turn_point])
+#     up_slope = t_one/t_turn_point
+#     down_slope = -t_one[0]/(t_one - t_turn_point)
+#     # set values below 0 or above 1 to 0
+#     x = torch.where((x < t_zero[0]) | (x > t_one[0]), t_zero[0], x)
+#     # the down_slope is also equal to the negative of the y intercept for the downward part of the hill
+#     x = torch.where(x<0.75, x*up_slope, x*down_slope - down_slope)
+#     return x
+# class Pos_Hill(nn.Module):
+#     def __init__(self, turn_point=0.75):
+#         super().__init__()
+#         self.turn_point = turn_point
+#     def forward(self, input):
+#         return pos_hill(input, self.turn_point)
+
 #output of function is like a hill, with the peak not necessarily in the middle, any inputs less than 0 or greater than 1 are set to 0
+#this version the turning point will be properly implemented
 def pos_hill(x, turn_point=0.75):
     #could possibly make the slopes another input variable and also potentially a trainable parameter
     # need to change both the up_slope and down_slope at the same time to maintain the continuity of the line
-    up_slope = 1/turn_point
-    down_slope = -1/(1 - turn_point)
+    t_zero = x.new([0.0])
+    t_one = x.new([1.0])
+    t_turn_point = x.new([turn_point])
+    up_slope = t_one/t_turn_point
+    down_slope = -t_one[0]/(t_one - t_turn_point)
     # set values below 0 or above 1 to 0
-    x = torch.where((x < 0) | (x > 1), 0, x)
+    x = torch.where((x < t_zero[0]) | (x > t_one[0]), t_zero[0], x)
     # the down_slope is also equal to the negative of the y intercept for the downward part of the hill
-    x = torch.where(x<0.75, x*up_slope, x*down_slope - down_slope)
+    x = torch.where(x<t_turn_point[0], x*up_slope, x*down_slope - down_slope)
     return x
 class Pos_Hill(nn.Module):
     def __init__(self, turn_point=0.75):
@@ -72,13 +110,15 @@ class Pos_Hill(nn.Module):
     def forward(self, input):
         return pos_hill(input, self.turn_point)
 
-    #passed test for gradient propagation
 
 
 #positive inputs are treated like relu, negative inputs are multiplied by a decimal
 def small_neg(x, neg_slope=0.2):
+    t_zero = x.new([0.0])
+    t_one = x.new([1.0])
+    t_neg_slope = x.new([neg_slope])
     #neg_slope could be varied and also be used as a trainable parameter
-    x = torch.where(x > 0, x, x * neg_slope)
+    x = torch.where(x > t_zero[0], x, x * t_neg_slope[0])
     return x
 class Small_Neg(nn.Module):
     def __init__(self, neg_slope=0.75):
